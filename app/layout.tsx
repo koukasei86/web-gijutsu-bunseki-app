@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'TechLens — Webサイト技術分析デモ',
+  title: 'TechLens — Webサイト技術分析',
   description: 'URLからWebサイトで使われていそうな技術を初心者向けに読み解く試作アプリ',
 };
 
