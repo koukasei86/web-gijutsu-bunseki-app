@@ -5,6 +5,43 @@ import { inspectHtml, suggestKind, buildPrototype } from '../lib/prototype.ts';
 import { safeUrl, fetchSafely } from '../lib/fetch-site.ts';
 
 const profile = inspectHtml('<title>映画 &amp; 作品</title><meta name="description" content="動画の紹介"><h1>作品を探す</h1><h2>今週の作品</h2><input type="search"><script>evil()</script>', 'https://example.com');
+test('learning intent overrides generic website category', () => {
+  assert.equal(suggestKind(profile, 'プロゲートのような学習サイトを作りたい'), 'learning');
+  assert.equal(suggestKind({ ...profile, title: 'Progate' }), 'learning');
+  assert.equal(suggestKind(profile, '商品をカートに追加するショップ'), 'shop');
+});
+test('learning template isolates student code and safely accepts a custom title', () => {
+  const { html } = buildPrototype(profile, 'learning', '', { name: '</strong><script>evil()</script>', theme: 'light' });
+  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+  assert.equal(scripts.length, 1);
+  assert.ok(!html.includes('<script>evil()'));
+  assert.match(html, /id="result" sandbox title=/);
+  assert.ok(html.includes('script-src &apos;none&apos;')); 
+  assert.match(html, /color-scheme:light/);
+  new vm.Script(scripts[0][1]);
+});
+test('learning exercise navigation, feedback, hints and progress work', () => {
+  const { html } = buildPrototype(profile, 'learning', '');
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+  const makeNode = () => ({value:'',textContent:'',hidden:false,disabled:false,dataset:{},events:{},addEventListener(k,f){this.events[k]=f;},setAttribute(k,v){this[k]=v;},removeAttribute(k){delete this[k];}});
+  const ids = ['result','editor','lesson-title','explanation','task','hint','answer','step','feedback','next','run','progress','progress-label','hint-button','answer-button','reset'];
+  const nodes = Object.fromEntries(ids.map(id => [id,makeNode()]));
+  const buttons = [0,1,2].map(i => Object.assign(makeNode(), {dataset:{lesson:String(i)}}));
+  let correctDocument = false;
+  const document = {getElementById:id => nodes[id], querySelectorAll:() => buttons};
+  class DOMParser { parseFromString() {return {querySelector:() => correctDocument ? {textContent:'こんにちは',style:{color:'blue'}} : null, querySelectorAll:() => correctDocument ? [{textContent:'はじめる'}] : []};} }
+  new vm.Script(script).runInNewContext({document,DOMParser});
+  assert.match(nodes['lesson-title'].textContent, /見出し/);
+  nodes.run.events.click(); assert.equal(nodes.next.disabled,true);
+  nodes['hint-button'].events.click(); assert.equal(nodes.hint.hidden,false);
+  correctDocument = true;
+  nodes.run.events.click(); assert.equal(nodes.progress.value,1);
+  nodes.next.events.click(); assert.match(nodes['lesson-title'].textContent,/色/);
+  nodes.run.events.click(); nodes.next.events.click();
+  assert.match(nodes.editor.value,/\n<!--/);
+  nodes.run.events.click(); assert.equal(nodes.progress.value,3); assert.match(nodes.feedback.textContent,/3レッスン完了/);
+  nodes.reset.events.click(); assert.equal(nodes.progress.value,2); assert.equal(nodes.next.disabled,true);
+});
 test('extracts public evidence and proposes a catalog', () => {
   assert.equal(profile.title, '映画 & 作品');
   assert.equal(profile.hasSearch, true);
@@ -52,3 +89,4 @@ test('URL validation and redirect refusal', async () => {
     await assert.rejects(fetchSafely(safeUrl('https://example.com')), /403/);
   } finally { globalThis.fetch = original; }
 });
+

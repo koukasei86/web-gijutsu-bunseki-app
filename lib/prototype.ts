@@ -1,10 +1,20 @@
+import { buildLearningSite } from './learning-template.ts';
+
 export type SiteProfile = {
   url: string; title: string; description: string; headings: string[];
   navigation: string[]; hasSearch: boolean; hasVideo: boolean;
   hasProducts: boolean; hasArticles: boolean; inspected: boolean;
 };
-export type SiteKind = 'catalog' | 'shop' | 'article' | 'landing';
-export const kindNames: Record<SiteKind, string> = { catalog: '動画・作品カタログ', shop: '商品一覧・ショップ', article: '記事・ニュース', landing: 'サービス紹介' };
+export type SiteKind = 'catalog' | 'shop' | 'article' | 'landing' | 'learning';
+export type PrototypeOptions = { name?: string; theme?: 'dark' | 'light' };
+export const kindNames: Record<SiteKind, string> = { learning: 'コードを書いて学ぶ学習サイト', catalog: '動画・作品カタログ', shop: '商品一覧・ショップ', article: '記事・ニュース', landing: 'サービス紹介' };
+export const kindFeatures: Record<SiteKind, string[]> = {
+  learning: ['説明・コード入力・実行結果の3ペイン', 'HTML・CSSの3つのレッスン', 'ヒント・解答例・課題チェック', '進捗表示・次の課題への移動'],
+  catalog: ['作品のカタログ', 'タイトル検索・カテゴリー切替', '作品の詳細を開く'],
+  shop: ['商品一覧・参考価格', '商品検索・カテゴリー切替', 'お試しカートへの追加'],
+  article: ['見出しを中心にした記事一覧', 'キーワード検索・カテゴリー切替', '記事の詳細を開く'],
+  landing: ['サービスの紹介・特徴', '項目検索・カテゴリー切替', '詳細説明を開く'],
+};
 
 function plain(value: string) {
   return value.replace(/<[^>]*>/g, ' ').replace(/&(?:amp|lt|gt|quot|apos|nbsp);/g, s => ({ '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&apos;': "'", '&nbsp;': ' ' })[s] || s).replace(/\s+/g, ' ').trim();
@@ -24,15 +34,25 @@ export function inspectHtml(html: string, url: string): SiteProfile {
     hasProducts: /schema.org\/Product|"@type"\s*:\s*"Product"/i.test(html) || /商品|カート|通販|shopping|shop\b/i.test(text),
     hasArticles: /<article\b/i.test(clean) || /ニュース|記事|ブログ|news|blog/i.test(text) };
 }
-export function suggestKind(profile: SiteProfile): SiteKind {
+export function suggestKind(profile: SiteProfile, brief = ''): SiteKind {
+  const text = brief || `${profile.title} ${profile.description} ${profile.headings.join(' ')} ${profile.url}`;
+  if (/progate|prog-8|プロゲート|レッスン|教材|コード.*(?:学|入力)|プログラミング.*学|学習サイト/i.test(text)) return 'learning';
+  if (brief) {
+    if (/商品|カート|通販|ショップ/i.test(brief)) return 'shop';
+    if (/動画|映画|作品|配信/i.test(brief)) return 'catalog';
+    if (/記事|ニュース|ブログ/i.test(brief)) return 'article';
+    if (/紹介|サービス|企業/i.test(brief)) return 'landing';
+  }
   return profile.hasProducts ? 'shop' : profile.hasVideo ? 'catalog' : profile.hasArticles ? 'article' : 'landing';
 }
 const escapeHtml = (s: string) => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
 // Only our own executable template is emitted. Remote markup never becomes code.
-export function buildPrototype(profile: SiteProfile, kind: SiteKind, brief: string) {
+export function buildPrototype(profile: SiteProfile, kind: SiteKind, brief: string, options: PrototypeOptions = {}) {
   if (!profile.inspected && brief.trim().length < 10) throw new Error('ページを確認できないため、作りたい画面や機能を10文字以上で教えてください。');
   const title = `${kindNames[kind]}の試作`;
+  const name = options.name?.trim().slice(0, 60) || (kind === 'learning' ? 'CodeSteps' : 'Learning Studio');
+  if (kind === 'learning') return { html: buildLearningSite(name, options.theme === 'light'), title: name };
   const heading = profile.headings[0] || kindNames[kind];
   const descriptions = { catalog: '気になる作品を探して、詳細を開いてみましょう。', shop: '商品を探して、お試しカートに追加できます。', article: '記事を探して、続きを読んでみましょう。', landing: 'サービスの特徴を確認して、紹介を開いてみましょう。' };
   const labels = kind === 'catalog' ? ['サンプル映画', 'サンプルシリーズ', 'サンプルドキュメンタリー'] : kind === 'shop' ? ['サンプルバッグ', 'サンプルマグ', 'サンプルノート'] : kind === 'article' ? ['暮らしのアイデア', '新しい学び', '今週のトピック'] : ['サービスの特徴', '使い方の紹介', 'よくある質問'];
@@ -73,5 +93,12 @@ document.querySelectorAll('.detail').forEach(button => button.addEventListener('
 }));
 document.querySelector('#close').addEventListener('click', () => dialog.close());
 </script></body></html>`;
-  return { html, title };
+  const refinedStyle = `
+body{--panel:#142238;--muted:#b9c9df}header strong{letter-spacing:.04em}.card{box-shadow:0 10px 30px #00000018}.card-body{padding:24px}h1{max-width:850px}main>p{max-width:760px}.art{letter-spacing:.12em}
+${kind === 'catalog' ? '.art{aspect-ratio:3/4;font-size:64px}.card-body h2{font-size:21px}.grid{gap:24px}' : ''}
+${kind === 'article' ? '.grid{grid-template-columns:1fr}.card{display:grid;grid-template-columns:180px 1fr}.art{height:100%;min-height:160px;aspect-ratio:auto}.card button{width:auto}.card:first-child h2{font-size:28px}@media(max-width:600px){.card{grid-template-columns:1fr}.art{min-height:100px;max-height:130px}}' : ''}
+${kind === 'landing' ? '.grid{grid-template-columns:1fr}.card{display:grid;grid-template-columns:120px 1fr;align-items:center}.art{height:100%;aspect-ratio:auto}.card button{width:auto}main>h1{padding-top:28px;padding-bottom:12px;font-size:clamp(32px,6vw,56px)}@media(max-width:600px){.card{grid-template-columns:1fr}.art{min-height:90px}}' : ''}
+${options.theme === 'light' ? 'body{background:#f3f6fc;color:#17243a}p,footer{color:#53627a}header{border-color:#d4dfed}.notice{background:#e1ebf6;color:#254367}.card,dialog{background:white;color:#17243a;border-color:#d4dfed}input{background:white;color:#17243a;border-color:#a5b6ca}button{background:#e6f0fa;color:#17324f;border-color:#a5b6ca}button:hover{background:#cde1f4}.controls button[aria-pressed="true"]{background:#165b78;color:white}small{color:#306078}' : ''}
+`;
+  return { html: html.replace('<strong>LEARNING STUDIO</strong>', `<strong>${escapeHtml(name)}</strong>`).replace('</style>', refinedStyle + '</style>'), title };
 }

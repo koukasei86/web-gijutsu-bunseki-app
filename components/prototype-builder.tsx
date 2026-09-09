@@ -4,7 +4,8 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Textarea } from '@/components/ui/textarea';
-import { buildPrototype, kindNames, suggestKind, type SiteKind, type SiteProfile } from '@/lib/prototype';
+import { Input } from '@/components/ui/input';
+import { buildPrototype, kindNames, kindFeatures, suggestKind, type SiteKind, type SiteProfile } from '@/lib/prototype';
 
 export function PrototypeBuilder({ profile }: { profile: SiteProfile }) {
   const [kind, setKind] = useState<SiteKind>(suggestKind(profile));
@@ -15,12 +16,16 @@ export function PrototypeBuilder({ profile }: { profile: SiteProfile }) {
   const [showCode, setShowCode] = useState(false);
   const [previewKey, setPreviewKey] = useState(0);
   const [previewReady, setPreviewReady] = useState(false);
+  const [siteName, setSiteName] = useState('');
+  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [mobile, setMobile] = useState(false);
+  const invalidate = () => { setState('proposal'); setHtml(''); setMessage(''); };
   const generate = async () => {
     setMessage(''); setState('generating'); setPreviewReady(false);
     try {
       // Yield so the generation state paints before creating the document.
       await new Promise(resolve => setTimeout(resolve, 50));
-      const output = buildPrototype(profile, kind, brief);
+      const output = buildPrototype(profile, kind, brief, { name: siteName, theme });
       setHtml(output.html); setPreviewKey(k => k + 1); setState('ready');
     } catch (error) { setMessage(error instanceof Error ? error.message : '生成できませんでした。もう一度お試しください。'); setState('proposal'); }
   };
@@ -43,13 +48,17 @@ export function PrototypeBuilder({ profile }: { profile: SiteProfile }) {
       <RadioGroup aria-label="試作する構成" value={kind} onValueChange={value => { setKind(value as SiteKind); setState('proposal'); setHtml(''); }} className="mt-3 grid gap-3 sm:grid-cols-2">{(Object.keys(kindNames) as SiteKind[]).map(key => <label key={key} className={`flex cursor-pointer items-center gap-3 rounded-xl border p-3 text-sm ${kind === key ? 'border-cyan-300/60 bg-cyan-300/10' : 'border-white/10'}`}><RadioGroupItem value={key}/>{kindNames[key]}{profile.inspected && key === suggestKind(profile) ? '（推定案）' : ''}</label>)}</RadioGroup>
       <label htmlFor="prototype-brief" className="mt-5 block text-base font-semibold">作りたい画面の説明 {profile.inspected ? '（任意）' : '（必須・10文字以上）'}</label>
       <Textarea id="prototype-brief" value={brief} maxLength={1000} onChange={e => { setBrief(e.target.value); setState('proposal'); setHtml(''); }} placeholder="例：映画をカードで並べて、タイトル検索と詳細表示を試したい" className="mt-2 min-h-24 w-full rounded-xl border border-white/20 bg-[#07111f] p-3 text-base text-white focus:outline-cyan-300"/>
+      <Button type="button" variant="outline" disabled={!brief.trim()} className="mt-3" onClick={() => { setKind(suggestKind(profile, brief)); invalidate(); setMessage('説明のキーワードから構成を提案しました。下の「今回作るもの」を確認してください。'); }}>説明から構成を提案する</Button>
+      <div className="mt-5 grid gap-5 sm:grid-cols-2"><div><label htmlFor="prototype-name" className="block text-base font-semibold">試作のサイト名（任意）</label><Input id="prototype-name" maxLength={60} value={siteName} onChange={e => { setSiteName(e.target.value); invalidate(); }} placeholder={kind === 'learning' ? 'CodeSteps' : 'Learning Studio'} className="mt-2 h-11 border-white/20 bg-[#07111f] text-base"/></div><div><p id="theme-label" className="text-base font-semibold">配色</p><RadioGroup aria-labelledby="theme-label" value={theme} onValueChange={v => { setTheme(v as 'dark' | 'light'); invalidate(); }} className="mt-2 flex flex-wrap gap-4"><label className="flex min-h-11 items-center gap-2"><RadioGroupItem value="dark"/>ダーク</label><label className="flex min-h-11 items-center gap-2"><RadioGroupItem value="light"/>ライト</label></RadioGroup></div></div>
     </fieldset>
-    <p className="mt-3 text-sm leading-6 text-slate-400">この版はAIによる自由生成ではなく、公開情報と選んだ構成を学習用テンプレートに組み合わせます。説明は紹介文に反映されます。検索・カテゴリー切替・{kind === 'shop' ? 'お試しカート' : '詳細表示'}が動きます。ログイン、決済、動画の再生・配信は含みません。</p>
+    <div className="mt-5 rounded-xl border border-cyan-300/20 bg-cyan-300/5 p-4"><h3 className="font-semibold text-cyan-100">今回作るもの：{kindNames[kind]}</h3><ul className="mt-3 space-y-1 text-sm leading-6 text-slate-200">{kindFeatures[kind].map(feature => <li key={feature}>✓ {feature}</li>)}</ul><p className="mt-3 text-sm leading-6 text-slate-400">{kind === 'learning' ? '教材はオリジナルの固定3課題です。Python・JavaScriptの実行や学習履歴の保存は含みません。' : 'データはサンプルです。ログイン・決済・動画配信・サーバーへの保存は含みません。'}</p></div>
+    <p className="mt-3 text-sm leading-6 text-slate-400">説明のキーワードと公開情報から構成を選ぶ方式です。自由な文章をすべて機能に変えるAI生成ではありません。生成する機能は上の一覧に限られます。</p>
     <div className="mt-5 flex flex-wrap gap-3"><Button disabled={state === 'generating'} onClick={generate} className="bg-cyan-300 text-slate-950 hover:bg-cyan-200">{state === 'generating' ? '試作コードを生成中…' : state === 'ready' ? 'もう一度生成する' : 'コードを生成して試す'}</Button><Button variant="outline" disabled={state === 'generating'} onClick={() => { setState('dismissed'); setHtml(''); }}>今回は生成しない</Button></div>
     {message && <p role="status" className="mt-4 text-sm text-amber-200">{message}</p>}
     {state === 'ready' && <div className="mt-6 border-t border-white/10 pt-5">
       <h3 className="text-lg font-semibold">試作プレビュー</h3><p role="status" className="mt-2 text-sm text-cyan-200">{previewReady ? 'プレビューを読み込みました。検索やボタンを操作して試せます。' : 'プレビューを読み込んでいます…'}</p>
-      <iframe key={previewKey} title="生成した学習用サイトのプレビュー" sandbox="allow-scripts" referrerPolicy="no-referrer" srcDoc={html} onLoad={() => setPreviewReady(true)} className="mt-4 h-[560px] w-full rounded-xl border border-white/20 bg-[#0b1322]"/>
+      <div className="mt-4 flex gap-2" aria-label="プレビューの表示幅"><Button variant="outline" aria-pressed={!mobile} onClick={() => setMobile(false)}>PC幅</Button><Button variant="outline" aria-pressed={mobile} onClick={() => setMobile(true)}>スマホ幅</Button></div>
+      <div className="mt-4 overflow-hidden rounded-xl border border-white/10 bg-black/20 p-2"><iframe key={previewKey} title="生成した学習用サイトのプレビュー" sandbox="allow-scripts" referrerPolicy="no-referrer" srcDoc={html} onLoad={() => setPreviewReady(true)} style={{ maxWidth: mobile ? 390 : '100%' }} className="mx-auto block h-[680px] w-full rounded-xl border border-white/20 bg-[#0b1322]"/></div>
       <div className="mt-4 flex flex-wrap gap-3"><Button variant="outline" onClick={() => { setPreviewReady(false); setPreviewKey(k => k + 1); }}>プレビューをリセット</Button><Button onClick={download}>HTMLを保存</Button><Button variant="outline" onClick={() => setShowCode(v => !v)} aria-expanded={showCode}>{showCode ? 'コードを閉じる' : 'コードを見る'}</Button><Button variant="outline" onClick={async () => { try { await navigator.clipboard.writeText(html); setMessage('コードをコピーしました。'); } catch { setMessage('コピーできませんでした。「HTMLを保存」を使ってください。'); } }}>コードをコピー</Button></div>
       <p className="mt-3 text-sm leading-6 text-slate-400">保存したHTMLをブラウザで開くと単体で動きます。HTMLは画面の構造、CSSは見た目、JavaScriptは検索やボタンの動きを担当します。</p>
       {showCode && <pre className="mt-4 max-h-96 overflow-auto rounded-xl bg-black/30 p-4 text-sm leading-6 text-cyan-100"><code>{html}</code></pre>}
