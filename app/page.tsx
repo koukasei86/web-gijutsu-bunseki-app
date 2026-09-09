@@ -1,6 +1,8 @@
 'use client';
 
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { PrototypeBuilder } from '@/components/prototype-builder';
+import { type SiteProfile } from '@/lib/prototype';
 import { ArrowRight, BarChart3, CheckCircle2, CircleHelp, Code2, ExternalLink, Globe2, LoaderCircle, Server, ShieldCheck, Sparkles, TriangleAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -42,6 +44,28 @@ export default function Home() {
   const [result, setResult] = useState(samples['vercel.com']);
   const [error, setError] = useState('');
   const [isLive, setIsLive] = useState(false);
+  const [profile, setProfile] = useState<SiteProfile | null>(null);
+  const requestId = useRef(0);
+  const runAnalysis = useCallback(async (url: string) => {
+    const id = ++requestId.current;
+    setError(''); setStatus('loading'); setProfile(null);
+    try {
+      hostOf(url);
+      const response = await fetch('/api/analyze', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url }), signal: AbortSignal.timeout(45_000) });
+      const data = await response.json() as { label?: string; techs?: Tech[]; profile?: SiteProfile; error?: string; fallback?: SiteProfile };
+      if (id !== requestId.current) return;
+      if (!response.ok || !data.label || !data.techs) {
+        setProfile(data.fallback || null);
+        throw new Error(data.error || '分析できませんでした。');
+      }
+      setResult({ label: data.label, techs: data.techs }); setProfile(data.profile || null); setIsLive(true); setStatus('success');
+      return { status: 'success', mode: 'live', site: data.label, technologies: data.techs.length };
+    } catch (e) {
+      if (id !== requestId.current) return;
+      setError(e instanceof Error ? (/abort|timeout/i.test(e.message) ? '時間内に応答がありませんでした。もう一度お試しください。' : e.message) : 'URLの形式を確認してください。'); setStatus('error');
+      return { status: 'error' };
+    }
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -56,30 +80,17 @@ export default function Home() {
       async execute(input: unknown) {
         const url = typeof input === 'object' && input !== null && 'url' in input ? String((input as { url: unknown }).url) : '';
         hostOf(url);
-        setValue(url); setError(''); setStatus('loading');
-        const response = await fetch('/api/analyze', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url }) });
-        const data = await response.json() as { label?: string; techs?: Tech[]; error?: string };
-        if (!response.ok || !data.label || !data.techs) { setStatus('error'); setError(data.error || '分析できませんでした。'); throw new Error(data.error || '分析できませんでした。'); }
-        setResult({ label: data.label, techs: data.techs }); setError(''); setIsLive(true); setStatus('success');
-        return { status: 'success', mode: 'live', site: data.label, technologies: data.techs.length };
+        setValue(url);
+        return await runAnalysis(url);
       },
     };
     void Promise.resolve(context.registerTool(tool, { signal: controller.signal })).catch(() => undefined);
     return () => controller.abort();
-  }, []);
+  }, [runAnalysis]);
 
   const analyze = async (event?: FormEvent) => {
     event?.preventDefault();
-    setError(''); setStatus('loading');
-    try {
-      hostOf(value.trim());
-      const response = await fetch('/api/analyze', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: value.trim() }) });
-      const data = await response.json() as { label?: string; techs?: Tech[]; error?: string };
-      if (!response.ok || !data.label || !data.techs) throw new Error(data.error || '分析できませんでした。');
-      setResult({ label: data.label, techs: data.techs }); setIsLive(true); setStatus('success');
-    } catch (e) {
-      setError(e instanceof Error && e.message ? e.message : 'URLの形式を確認してください。例：https://vercel.com'); setStatus('error');
-    }
+    await runAnalysis(value.trim());
   };
 
   return (
@@ -94,11 +105,11 @@ export default function Home() {
         <section className="mb-7"><p className="mb-2 font-mono text-xs font-semibold uppercase tracking-[.18em] text-cyan-400">Website technology explorer</p><h1 className="text-2xl font-semibold tracking-tight text-white md:text-3xl">このサイト、何でできてる？</h1><p className="mt-2 max-w-2xl text-[15px] leading-7 text-slate-400">URLから見つけられる手がかりを、初心者向けの言葉で読み解きます。</p></section>
         <section className="rounded-2xl border border-white/10 bg-[#0c1728] p-4 shadow-2xl shadow-black/20 md:p-6">
           <form onSubmit={analyze} className="flex flex-col gap-3 sm:flex-row"><label className="sr-only" htmlFor="site-url">調べたいサイトのURL</label><div className="relative flex-1"><Globe2 className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={18}/><Input id="site-url" value={value} onChange={(e) => setValue(e.target.value)} placeholder="https://example.com" className="h-12 border-white/10 bg-[#07111f] pl-11 text-base text-white placeholder:text-slate-600 focus-visible:ring-cyan-400" autoCapitalize="none" autoCorrect="off"/></div><Button type="submit" disabled={status === 'loading'} className="h-12 bg-cyan-400 px-6 font-semibold text-[#04101c] hover:bg-cyan-300 disabled:opacity-70">{status === 'loading' ? <><LoaderCircle className="animate-spin"/>分析中...</> : <>サイトを調べる<ArrowRight/></>}</Button></form>
-          <div className="mt-4 flex flex-wrap items-center gap-2 text-sm"><span className="text-slate-500">すぐ試す：</span>{Object.keys(samples).map((domain) => <button key={domain} type="button" onClick={() => { setValue(`https://${domain}`); setResult(samples[domain]); setIsLive(false); setStatus('ready'); setError(''); }} className="rounded-lg border border-white/10 bg-white/[.03] px-3 py-1.5 text-slate-300 transition hover:border-cyan-400/40 hover:text-cyan-300">{domain}</button>)}</div>
+          <div className="mt-4 flex flex-wrap items-center gap-2 text-sm"><span className="text-slate-500">すぐ試す：</span>{Object.keys(samples).map((domain) => <button key={domain} type="button" onClick={() => { requestId.current++; setProfile(null); setValue(`https://${domain}`); setResult(samples[domain]); setIsLive(false); setStatus('ready'); setError(''); }} className="rounded-lg border border-white/10 bg-white/[.03] px-3 py-1.5 text-slate-300 transition hover:border-cyan-400/40 hover:text-cyan-300">{domain}</button>)}</div>
         </section>
-        <div className="mt-5 flex gap-3 rounded-xl border border-cyan-300/15 bg-cyan-300/[.05] px-4 py-3 text-sm leading-6 text-cyan-100/80"><Sparkles className="mt-0.5 shrink-0 text-cyan-300" size={17}/><p><strong className="text-cyan-200">実サイト分析に対応しました。</strong> 公開HTMLとHTTPヘッダーを取得して判定します。ログインが必要なページや取得を拒否するサイトは分析できません。</p></div>
+        <div className="mt-5 flex gap-3 rounded-xl border border-cyan-300/15 bg-cyan-300/[.05] px-4 py-3 text-sm leading-6 text-cyan-100/80"><Sparkles className="mt-0.5 shrink-0 text-cyan-300" size={17}/><p><strong className="text-cyan-200">実サイト分析に対応しました。</strong> 公開HTMLとHTTPヘッダーを取得して判定します。技術が分からない場合も、似た構成の試作コードを作れます。取得できないページは説明を補足してください。</p></div>
         {status === 'error' && <div role="alert" className="mt-6 flex items-start gap-3 rounded-xl border border-rose-400/25 bg-rose-400/[.07] p-4 text-rose-100"><TriangleAlert className="mt-0.5 shrink-0" size={19}/><div><p className="font-semibold">分析を始められませんでした</p><p className="mt-1 text-sm leading-6 text-rose-200/75">{error}</p></div></div>}
-        {status === 'loading' && <section aria-live="polite" className="mt-8"><div className="mb-4 flex items-center gap-3 text-slate-300"><LoaderCircle className="animate-spin text-cyan-400" size={20}/><span>サンプルの判定情報を読み込んでいます…</span></div><div className="grid gap-4 md:grid-cols-2"><div className="h-64 animate-pulse rounded-2xl bg-white/[.05]"/><div className="h-64 animate-pulse rounded-2xl bg-white/[.05]"/></div></section>}
+        {status === 'loading' && <section aria-live="polite" className="mt-8"><div className="mb-4 flex items-center gap-3 text-slate-300"><LoaderCircle className="animate-spin text-cyan-400" size={20}/><span>公開ページの内容と技術の手がかりを確認しています…</span></div><div className="grid gap-4 md:grid-cols-2"><div className="h-64 animate-pulse rounded-2xl bg-white/[.05]"/><div className="h-64 animate-pulse rounded-2xl bg-white/[.05]"/></div></section>}
         {(status === 'success' || status === 'ready') && <section className="mt-9" aria-live="polite">
           <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><div className="mb-2 flex items-center gap-2 text-sm text-emerald-300"><CheckCircle2 size={17}/> {isLive ? '実サイトの分析が完了しました' : '入力例（デモ結果）'}</div><h2 className="text-xl font-semibold text-white">{result.label} で見つかった技術 <span className="ml-1 font-mono text-sm font-normal text-slate-500">{result.techs.length}件</span></h2></div><div className="flex flex-wrap gap-2">{categories.map((category) => { const count = result.techs.filter(t => t.category === category).length; return count ? <span key={category} className="rounded-md border border-white/10 px-2.5 py-1 text-xs text-slate-400">{category} <b className="ml-1 text-slate-200">{count}</b></span> : null })}</div></div>
           <div className="grid gap-4 md:grid-cols-2">{result.techs.map((tech) => <article key={tech.name} className="group rounded-2xl border border-white/10 bg-[#0c1728] p-5 transition hover:border-cyan-400/25 md:p-6"><div className="flex items-start justify-between gap-4"><div className="flex items-center gap-3"><span className="grid h-10 w-10 place-items-center rounded-xl bg-cyan-400/10 text-cyan-300">{tech.category === 'サーバー・ホスティング' ? <Server size={19}/> : tech.category === 'アクセス解析' ? <BarChart3 size={19}/> : <Code2 size={19}/>}</span><div><p className="text-xs text-slate-500">{tech.category}</p><h3 className="mt-0.5 text-lg font-semibold text-white">{tech.name}</h3></div></div><div className="text-right"><p className="font-mono text-xl font-semibold text-cyan-300">{tech.confidence}%</p><p className="text-xs text-slate-500">信頼度</p></div></div><div className="mt-4 h-1.5 overflow-hidden rounded-full bg-white/[.06]"><div className="h-full rounded-full bg-gradient-to-r from-blue-500 to-cyan-300" style={{width: `${tech.confidence}%`}}/></div><span className="mt-4 inline-flex rounded-full border border-cyan-400/20 bg-cyan-400/[.06] px-2.5 py-1 text-xs font-medium text-cyan-300">{tech.certainty}</span><dl className="mt-5 space-y-4 text-sm leading-6"><div><dt className="font-semibold text-slate-200">これは何？</dt><dd className="mt-1 text-slate-400">{tech.what}</dd></div><div><dt className="font-semibold text-slate-200">どこで使われる？</dt><dd className="mt-1 text-slate-400">{tech.where}</dd></div><div className="rounded-xl bg-[#07111f] p-3.5"><dt className="flex items-center gap-2 font-semibold text-slate-200"><CircleHelp size={15} className="text-cyan-400"/>判定の根拠</dt><dd className="mt-1 text-slate-400">{tech.evidence}</dd></div><div><dt className="font-semibold text-slate-200">作るなら何を学ぶ？</dt><dd className="mt-1 text-slate-400">{tech.learn}</dd></div></dl>
@@ -110,8 +121,10 @@ export default function Home() {
           </article>)}</div>
           <div className="mt-5 rounded-2xl border border-dashed border-white/10 p-5 text-sm leading-6 text-slate-400"><div className="flex items-start gap-3"><CircleHelp className="mt-0.5 shrink-0 text-slate-500" size={18}/><p><strong className="text-slate-300">判定できないもの：</strong> サーバー内部の言語やデータベースは、外から見える情報だけでは確実に分かりません。TechLensは、根拠がない技術を断定しない方針です。</p></div></div>
         </section>}
+        {profile && status !== 'loading' && <PrototypeBuilder key={profile.url + requestId.current} profile={profile}/>}
         <footer className="mt-10 flex items-center justify-between border-t border-white/8 py-6 text-xs text-slate-600"><span>TechLens prototype</span><span className="flex items-center gap-1">Public signals only <ExternalLink size={12}/></span></footer>
       </div>
     </main>
   );
 }
+

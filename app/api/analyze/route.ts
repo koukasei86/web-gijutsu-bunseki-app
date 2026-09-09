@@ -1,49 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { safeUrl, fetchSafely } from '@/lib/fetch-site';
+import { inspectHtml } from '@/lib/prototype';
 
 type Certainty = '確認できた技術' | '可能性が高い技術' | '推定された技術' | '判定できない技術';
 type Tech = { name: string; category: string; certainty: Certainty; confidence: number; what: string; where: string; evidence: string; learn: string; actual?: string; command?: string; sample?: string };
-
-const MAX_BYTES = 1_500_000;
-
-function isBlockedHost(hostname: string) {
-  const h = hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h === '0.0.0.0' || h === '::1') return true;
-  if (/^127\./.test(h) || /^10\./.test(h) || /^192\.168\./.test(h) || /^169\.254\./.test(h)) return true;
-  const match = h.match(/^172\.(\d+)\./);
-  if (match && Number(match[1]) >= 16 && Number(match[1]) <= 31) return true;
-  return h.includes(':') && (h.startsWith('fc') || h.startsWith('fd') || h.startsWith('fe8') || h.startsWith('fe9') || h.startsWith('fea') || h.startsWith('feb'));
-}
-
-function safeUrl(raw: string) {
-  const value = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-  const url = new URL(value);
-  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || !url.hostname || isBlockedHost(url.hostname)) throw new Error('公開されているHTTPまたはHTTPSのURLを入力してください。');
-  if (url.port && !['80', '443'].includes(url.port)) throw new Error('安全のため、通常とは異なるポート番号には接続できません。');
-  return url;
-}
-
-async function fetchSafely(start: URL) {
-  let current = start;
-  for (let i = 0; i < 4; i++) {
-    const response = await fetch(current, { redirect: 'manual', signal: AbortSignal.timeout(10_000), headers: { 'User-Agent': 'TechLens/1.0 (+website technology analysis)', Accept: 'text/html,application/xhtml+xml' } });
-    if ([301, 302, 303, 307, 308].includes(response.status)) {
-      const location = response.headers.get('location');
-      if (!location) throw new Error('転送先を確認できませんでした。');
-      current = safeUrl(new URL(location, current).toString());
-      continue;
-    }
-    if (!response.ok) throw new Error(`サイトからエラーが返されました（HTTP ${response.status}）。`);
-    const type = response.headers.get('content-type') || '';
-    if (!type.includes('text/html') && !type.includes('application/xhtml+xml')) throw new Error('このURLはWebページ（HTML）ではないようです。');
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error('ページ内容を読み取れませんでした。');
-    const chunks: Uint8Array[] = []; let size = 0;
-    while (true) { const { done, value } = await reader.read(); if (done) break; size += value.byteLength; if (size > MAX_BYTES) { await reader.cancel(); break; } chunks.push(value); }
-    const merged = new Uint8Array(chunks.reduce((n, c) => n + c.byteLength, 0)); let offset = 0; for (const chunk of chunks) { merged.set(chunk, offset); offset += chunk.byteLength; }
-    return { response, html: new TextDecoder().decode(merged), finalUrl: current.toString(), truncated: size > MAX_BYTES };
-  }
-  throw new Error('転送回数が多すぎるため、安全に分析できませんでした。');
-}
 
 const info: Record<string, Omit<Tech, 'name' | 'category' | 'certainty' | 'confidence' | 'evidence'>> = {
   React: { what: '画面を部品ごとに組み立てるJavaScriptライブラリです。', where: 'ボタンやメニューなど、操作に反応して変化する画面に使われます。', learn: 'HTML・CSS・JavaScriptの基礎 → Reactの順がおすすめです。' },
@@ -97,19 +57,24 @@ function detect(html: string, headers: Headers): Tech[] {
 }
 
 export async function POST(request: NextRequest) {
+  let validatedUrl: URL | undefined;
   try {
     const body = await request.json() as { url?: unknown };
     if (typeof body.url !== 'string' || body.url.length > 2048) return NextResponse.json({ error: 'URLを正しく入力してください。' }, { status: 400 });
-    const { response, html, finalUrl, truncated } = await fetchSafely(safeUrl(body.url.trim()));
+    validatedUrl = safeUrl(body.url.trim());
+    const { response, html, finalUrl, truncated } = await fetchSafely(validatedUrl);
+    const pageTitle = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '';
+    if (/just a moment|attention required|access denied|robot check|verify you are human/i.test(pageTitle)) throw new Error('サイト側のアクセス確認画面が表示され、元ページを読み取れませんでした。');
     const techs = detect(html, response.headers);
     if (!techs.length) techs.push({ name: '特定できませんでした', category: 'その他の外部サービス', certainty: '判定できない技術', confidence: 0, what: '今回取得できた公開情報には、対応技術を示す特徴がありませんでした。', where: 'サイト内部では何らかの技術が使われていますが、外からは見えない場合があります。', evidence: 'HTMLとHTTPヘッダーを確認しましたが、登録済みの判定パターンに一致しませんでした。', learn: 'ブラウザの開発者ツールでHTML・通信・Cookieを見る方法を学ぶと、調査範囲を広げられます。' });
     techs.forEach(tech => { tech.command = `curl -L -I "${finalUrl}"\ncurl -L "${finalUrl}"`; });
     const scripts = [...html.matchAll(/<script[^>]+src=["']([^"']+)["']/gi)].map(m => { try { return new URL(m[1], finalUrl).toString(); } catch { return m[1]; } }).slice(0, 8);
     const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.replace(/\s+/g, ' ').trim().slice(0, 120);
-    return NextResponse.json({ label: title || new URL(finalUrl).hostname, techs, meta: { finalUrl, checked: ['HTML', 'HTTPヘッダー', 'メタ情報', 'スクリプトURL'], scripts, truncated } });
+    return NextResponse.json({ label: title || new URL(finalUrl).hostname, techs, profile: inspectHtml(html, finalUrl), meta: { finalUrl, checked: ['HTML', 'HTTPヘッダー', 'メタ情報', 'スクリプトURL'], scripts, truncated } });
   } catch (error) {
     const message = error instanceof Error ? error.message : '分析中に問題が発生しました。';
-    const friendly = /timed out|abort/i.test(message) ? 'サイトから時間内に応答がありませんでした。' : message;
-    return NextResponse.json({ error: friendly }, { status: 422 });
+    const friendly = /timed out|abort/i.test(message) ? 'サイトから時間内に応答がありませんでした。' : /internal error|fetch failed|network|dns|ENOTFOUND/i.test(message) ? 'サイトに接続できませんでした。URLを確認するか、下の説明欄から試作できます。' : /Invalid URL|Unexpected token|JSON/i.test(message) ? 'URLを正しく入力してください。' : message;
+    return NextResponse.json({ error: friendly, fallback: validatedUrl ? { url: validatedUrl.toString(), title: validatedUrl.hostname, description: '', headings: [], navigation: [], hasSearch: false, hasVideo: false, hasProducts: false, hasArticles: false, inspected: false } : undefined }, { status: 422 });
   }
 }
+
