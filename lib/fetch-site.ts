@@ -30,12 +30,19 @@ export async function fetchSafely(start: URL) {
       continue;
     }
     if (!response.ok) throw new Error(`サイトからエラーが返されました（HTTP ${response.status}）。`);
-    const type = response.headers.get('content-type') || '';
+    const type = (response.headers.get('content-type') || '').toLowerCase();
     if (!type.includes('text/html') && !type.includes('application/xhtml+xml')) throw new Error('このURLはWebページ（HTML）ではないようです。');
     const reader = response.body?.getReader();
     if (!reader) throw new Error('ページ内容を読み取れませんでした。');
     const chunks: Uint8Array[] = []; let size = 0;
-    while (true) { const { done, value } = await reader.read(); if (done) break; size += value.byteLength; if (size > MAX_BYTES) { await reader.cancel(); break; } chunks.push(value); }
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const remaining = MAX_BYTES - size;
+      size += value.byteLength;
+      chunks.push(value.subarray(0, Math.max(0, remaining)));
+      if (size > MAX_BYTES) { await reader.cancel(); break; }
+    }
     const merged = new Uint8Array(chunks.reduce((n, c) => n + c.byteLength, 0)); let offset = 0; for (const chunk of chunks) { merged.set(chunk, offset); offset += chunk.byteLength; }
     return { response, html: new TextDecoder().decode(merged), finalUrl: current.toString(), truncated: size > MAX_BYTES };
   }

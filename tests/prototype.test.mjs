@@ -90,3 +90,26 @@ test('URL validation and redirect refusal', async () => {
   } finally { globalThis.fetch = original; }
 });
 
+test('custom item labels, grid width and optional controls reach the exported HTML', () => {
+  const { html } = buildPrototype(profile, 'shop', '', { items: ['<script>bad()</script>', '二つ目', '三つ目', '四つ目'], columns: 2, search: false, filters: false });
+  assert.equal((html.match(/<article class="card"/g) || []).length, 4);
+  assert.ok(html.includes('&lt;script&gt;bad()&lt;/script&gt;'));
+  assert.ok(!html.includes('<script>bad()'));
+  assert.ok(!html.includes('<input id="search"'));
+  assert.ok(!html.includes('data-filter="'));
+  assert.ok(html.includes('repeat(2,minmax(0,1fr))'));
+  assert.ok(!html.includes('undefined'));
+  new vm.Script(html.match(/<script>([\s\S]*?)<\/script>/)[1]);
+});
+
+test('large response chunks retain the allowed HTML prefix and disclose truncation', async () => {
+  const original = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => new Response('<title>Large page</title>' + 'x'.repeat(1_500_000), {headers:{'content-type':'Text/HTML; charset=UTF-8'}});
+    const result = await fetchSafely(safeUrl('https://example.com'));
+    assert.equal(result.truncated, true);
+    assert.equal(result.html.length, 1_500_000);
+    assert.ok(result.html.startsWith('<title>Large page</title>'));
+  } finally { globalThis.fetch = original; }
+});
+
